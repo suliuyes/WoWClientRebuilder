@@ -262,7 +262,19 @@ void reconstruct(const Recipe& r, const std::string& outDir,
         mopts.expected_size = m.size;
         mopts.progress_label = url_basename(m.url);
         printf("Downloading %s...\n", url_basename(m.url).c_str());
-        download_file(m.url, dest, mopts);
+        try
+        {
+            download_file(m.url, dest, mopts);
+        }
+        catch (const SizeMismatchError&)
+        {
+            // The archive on disk has the wrong length in place; appending
+            // more can never fix it.  Remove it so the next run re-downloads
+            // from zero instead of failing the same way forever.
+            std::error_code rec;
+            std::filesystem::remove(dest, rec);
+            throw;
+        }
         // Track BEFORE opening: if MpqArchive construction throws (e.g. corrupt
         // MPQ that downloaded at the right size but is invalid), the file is
         // still on disk and must be cleaned up by the exception path below.
@@ -279,6 +291,7 @@ void reconstruct(const Recipe& r, const std::string& outDir,
         std::string part;
         Bytes data;
         bool skipped = false;
+        bool resumeSkip = false;
         bool markPending = false;
         switch (a.source)
         {
@@ -366,7 +379,8 @@ void reconstruct(const Recipe& r, const std::string& outDir,
                     }
                     if (dstOk)
                     {
-                        skipped = true;
+                        skipped    = true;
+                        resumeSkip = true;
                         break;
                     }
                     // File missing or wrong size — fall through and re-download.
@@ -385,6 +399,17 @@ void reconstruct(const Recipe& r, const std::string& outDir,
                 {
                     download_file(a.url, part, popts);
                 }
+                catch (const SizeMismatchError&)
+                {
+                    // The .part has the wrong length in place (e.g. a server
+                    // once answered 200 to a Range request and its body was
+                    // appended).  Appending can never shrink it back, so
+                    // discard it: the next run then starts this file from
+                    // zero instead of failing the same way forever.
+                    std::error_code rec;
+                    std::filesystem::remove(part, rec);
+                    throw;
+                }
                 catch (const std::exception&)
                 {
                     if (a.optional)
@@ -394,6 +419,9 @@ void reconstruct(const Recipe& r, const std::string& outDir,
                         skipped = true;
                         break;
                     }
+                    // Non-optional network failures keep the .part on disk:
+                    // the bytes fetched so far are exactly what a resumed run
+                    // continues from.
                     throw;
                 }
                 // Only load bytes into RAM when an MD5 must be verified.
@@ -437,8 +465,16 @@ void reconstruct(const Recipe& r, const std::string& outDir,
         }
         if (skipped)
         {
-            printf("  %-28s SKIPPED (optional, source missing)\n",
-                   a.outName.c_str());
+            if (resumeSkip)
+            {
+                printf("  %-28s already downloaded (resumed)\n",
+                       a.outName.c_str());
+            }
+            else
+            {
+                printf("  %-28s SKIPPED (optional, source missing)\n",
+                       a.outName.c_str());
+            }
             continue;
         }
         // Size comes from disk for download-to-disk sources (RepairMd5,
