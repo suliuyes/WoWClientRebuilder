@@ -41,6 +41,7 @@
 #include "bencode.h"
 #include "mfil.h"
 #include "datarecipe.h"
+#include "progress.h"
 #include <curl/curl.h>
 #include <cstdio>
 #include <iostream>
@@ -297,19 +298,27 @@ int main(int argc, char** argv)
         if (resumable)
         {
             // Say up front what resuming actually saves, so the user can tell
-            // within seconds that the previous download was kept.
+            // within seconds that the previous download was kept.  Files
+            // already done are then shown at 100% by reconstruct(), in the
+            // same progress-line format as live downloads.
             std::size_t doneCount = 0;
+            long long doneBytes   = 0;
             for (const Artifact& a : run.artifacts)
             {
                 if (wcr::is_done(journal, a.outName))
                 {
                     ++doneCount;
+                    if (a.size > 0)
+                    {
+                        doneBytes += a.size;
+                    }
                 }
             }
-            printf("Resuming previous download: %zu/%zu data files already "
-                   "completed, partial files continue from where they "
-                   "stopped\n",
-                   doneCount, run.artifacts.size());
+            printf("Resuming previous download: %zu/%zu data files (%s) "
+                   "already completed, partial files continue from where "
+                   "they stopped\n",
+                   doneCount, run.artifacts.size(),
+                   wcr::human_bytes(doneBytes).c_str());
         }
         if (!wcr::confirm_preflight(total, avail, params.yes,
                                     std::cin, std::cout))
