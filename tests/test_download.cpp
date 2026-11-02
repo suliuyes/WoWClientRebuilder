@@ -68,3 +68,88 @@ TEST_CASE("download_file copies a file:// source and validates size")
     remove(src.c_str());
     remove(dst.c_str());
 }
+
+TEST_CASE("download_file skips the transfer when dest already has the "
+          "expected size")
+{
+    // A .part that finished but was never renamed/recorded used to make every
+    // later run fail: resume sent "Range: bytes=<size>-", the server answered
+    // 416, and the run aborted.  An already-complete destination must be
+    // recognized BEFORE any transfer, so an unreachable URL is never hit.
+    std::string dst = "dl_complete.bin";
+    wcr::Bytes seed(100, uint8_t('x'));
+    wcr::write_file(dst, seed);
+    wcr::DownloadOpts o;
+    o.expected_size = 100;
+    o.resume        = true;
+    // Port 1 on loopback is unbound: any real connection attempt would throw.
+    CHECK_NOTHROW(wcr::download_file("http://127.0.0.1:1/nope", dst, o));
+    CHECK(wcr::read_file(dst) == seed); // untouched, not truncated
+    remove(dst.c_str());
+}
+
+TEST_CASE("download_file restarts from zero when dest is larger than expected")
+{
+    // An oversized destination (e.g. a server once answered 200 to a Range
+    // request and its full body was appended) can never be repaired by
+    // appending; it must be truncated and re-downloaded, not resumed.
+    std::string src = "dl_src100.bin", dst = "dl_oversize.bin";
+    wcr::Bytes data(100);
+    for (size_t i = 0; i < data.size(); ++i)
+    {
+        data[i] = (uint8_t)(i * 3);
+    }
+    wcr::write_file(src, data);
+    wcr::Bytes junk(200, uint8_t('j')); // larger than expected
+    wcr::write_file(dst, junk);
+    std::string abs =
+        std::string(_fullpath(nullptr, src.c_str(), 0));
+    wcr::DownloadOpts o;
+    o.expected_size = 100;
+    o.resume        = true;
+    wcr::download_file(file_url(abs), dst, o);
+    CHECK(wcr::read_file(dst) == data); // exactly the source, no junk prefix
+    remove(src.c_str());
+    remove(dst.c_str());
+}
+
+TEST_CASE("download_file resumes a partial file:// source by appending")
+{
+    // Byte-level resume: dest holds the first 40 bytes of the source; the
+    // transfer must fetch only the remainder and land byte-identical.
+    std::string src = "dl_src_res.bin", dst = "dl_part_res.bin";
+    wcr::Bytes data(100);
+    for (size_t i = 0; i < data.size(); ++i)
+    {
+        data[i] = (uint8_t)(i * 11 + 5);
+    }
+    wcr::write_file(src, data);
+    wcr::Bytes partial(data.begin(), data.begin() + 40);
+    wcr::write_file(dst, partial);
+    std::string abs =
+        std::string(_fullpath(nullptr, src.c_str(), 0));
+    wcr::DownloadOpts o;
+    o.expected_size = 100;
+    o.resume        = true;
+    wcr::download_file(file_url(abs), dst, o);
+    CHECK(wcr::read_file(dst) == data);
+    remove(src.c_str());
+    remove(dst.c_str());
+}
+
+TEST_CASE("download_file size mismatch throws SizeMismatchError")
+{
+    // The specific type lets reconstruct() discard the corrupt file instead
+    // of leaving it to fail the same way on every later resume.
+    std::string src = "dl_src_m.bin", dst = "dl_mismatch.bin";
+    wcr::Bytes data(300);
+    wcr::write_file(src, data);
+    std::string abs = std::string(_fullpath(nullptr, src.c_str(), 0));
+    wcr::DownloadOpts o;
+    o.expected_size = 100; // wrong on purpose
+    o.resume        = true;
+    CHECK_THROWS_AS(wcr::download_file(file_url(abs), dst, o),
+                    wcr::SizeMismatchError);
+    remove(src.c_str());
+    remove(dst.c_str());
+}

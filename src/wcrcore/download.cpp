@@ -144,6 +144,16 @@ void download_file(const std::string& url, const std::string& dest,
     // Resume logic: if the destination already has bytes and resume is enabled,
     // open in append mode and ask the server for a byte-range starting where we
     // left off (HTTP Range: bytes=<start>-).  Otherwise start fresh ("wb").
+    //
+    // With a known expected size the existing bytes are also sanity-checked
+    // against it, because appending can only ever grow the file:
+    // - exactly complete: the previous run finished this file but died before
+    //   it could rename/record it.  Resume would send "Range: bytes=<size>-",
+    //   get HTTP 416, and fail the run again forever; skip the transfer and
+    //   let the caller's own verification (MD5/size) judge the bytes.
+    // - already too large: junk appended by a server that answered 200 to an
+    //   earlier Range request.  No append can shrink it back, so truncate and
+    //   re-download from zero.
     long long start = 0;
     const char* mode = "wb";
     if (opts.resume)
@@ -151,8 +161,20 @@ void download_file(const std::string& url, const std::string& dest,
         long long have = file_size(dest);
         if (have > 0)
         {
-            start = have;
-            mode = "ab";
+            if (opts.expected_size >= 0 && have >= opts.expected_size)
+            {
+                if (have == opts.expected_size)
+                {
+                    return;
+                }
+                // Oversized: fall through with start = 0 and mode "wb",
+                // which truncates the file back to a clean slate.
+            }
+            else
+            {
+                start = have;
+                mode = "ab";
+            }
         }
     }
     FILE* fp = fopen(dest.c_str(), mode);
@@ -197,6 +219,15 @@ void download_file(const std::string& url, const std::string& dest,
     }
 
     CURLcode rc = curl_easy_perform(c);
+    // A resume from the file's full length (see the "exactly complete" case
+    // above, and in-place source archives) makes the server answer
+    // 416 Range Not Satisfiable.  CURLINFO_RESPONSE_CODE is still valid after
+    // a failed perform, so grab it before cleanup to recognize that case.
+    long httpCode = 0;
+    if (rc != CURLE_OK && start > 0)
+    {
+        curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &httpCode);
+    }
     curl_easy_cleanup(c);
     fclose(fp);
 
@@ -214,15 +245,27 @@ void download_file(const std::string& url, const std::string& dest,
 
     if (rc != CURLE_OK)
     {
+        // 416 with a live resume offset means "nothing left to fetch": the
+        // server (or file:// source) has no bytes at or after `start`, i.e.
+        // the local file is already at least as long as the remote one.  The
+        // caller's own checks (MD5, expected size, zip parse) judge whether
+        // those bytes are good, so treat the transfer as complete.  This also
+        // covers destinations with an unknown expected size (the source
+        // archives), where the equal-size shortcut above cannot fire.
+        if (httpCode == 416 && start > 0)
+        {
+            return;
+        }
         throw std::runtime_error(std::string("download failed: ") +
                                  curl_easy_strerror(rc));
     }
     // Post-download size validation: compare on-disk file size against the
     // caller-supplied expected value.  A mismatch means we got a truncated or
-    // corrupt response; throw so the caller can retry or abort cleanly.
+    // corrupt response; throw SizeMismatchError so the caller knows the bytes
+    // on disk are wrong in place (discarding them is the only repair).
     if (opts.expected_size >= 0 && file_size(dest) != opts.expected_size)
     {
-        throw std::runtime_error("size mismatch for " + dest);
+        throw SizeMismatchError("size mismatch for " + dest);
     }
 }
 } // namespace wcr

@@ -28,9 +28,19 @@
  */
 
 #pragma once
+#include <stdexcept>
 #include <string>
 namespace wcr
 {
+/// Thrown when the downloaded file's byte count does not match
+/// DownloadOpts::expected_size. Callers use the type (not the message) to
+/// decide that the destination file is corrupt-in-place -- appending more
+/// bytes can never repair it -- so they discard it and start that file over.
+struct SizeMismatchError : std::runtime_error
+{
+    using std::runtime_error::runtime_error;
+};
+
 /// Configuration options for download_file().
 struct DownloadOpts
 {
