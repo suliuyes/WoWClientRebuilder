@@ -129,6 +129,27 @@ At each of the five setup questions you can enter **`B`** to step back to the pr
 question or **`X`** to exit (with a confirmation). Exiting stops cleanly before anything
 is downloaded.
 
+### Resuming an interrupted download
+
+Downloads can be interrupted at any time (close the console, Ctrl+C, network drop).
+Re-running with the **same choices** (mode, version, locale(s), region) as before will
+detect the previous state and offer to **resume**: already-completed files are skipped
+and partially-downloaded ones continue from where they stopped. Answer **`y`** to
+resume (recommended) or **`n`** to delete the old partial files and start over.
+
+The resume state is bound to the exact run identity — region, manifest, and the full
+download recipe (version/mode/locale/cinematics). A run with different choices discards
+the old state (disclosed before the pre-flight confirmation, with the reason) rather
+than splicing mismatched bytes. The optional `--tfil` piece verification participates
+in that identity too. The flag CLI (`--yes`) resumes automatically when the state
+matches, with no prompt.
+
+A file that was interrupted mid-download keeps its bytes (`.part` for Data artifacts,
+in place for the source archives). A file that finished downloading but was not yet
+recorded is detected and kept as well — no re-download is needed. Files whose on-disk
+size is wrong in place (e.g. an appended error page) are discarded automatically so
+the next run starts that file fresh instead of failing forever.
+
 ### Scripted (flags)
 
 ```
