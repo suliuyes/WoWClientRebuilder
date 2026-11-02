@@ -477,17 +477,17 @@ TEST_CASE("run_interactive: DataOnly Back from Region skips Locale to Version")
     CHECK(fetched == false); // DataOnly never fetches locales
 }
 
-TEST_CASE("should_clear_journal: only an explicit yes clears; EOF/no resume")
+TEST_CASE("should_clear_journal: only an explicit no clears; y/EOF resume")
 {
     {
-        std::istringstream in("y\n"); // explicit start-fresh -> clear
-        std::ostringstream out;
-        CHECK(wcr::should_clear_journal(in, out, true, "out") == true);
-    }
-    {
-        std::istringstream in("n\n"); // decline -> resume (keep journal)
+        std::istringstream in("y\n"); // explicit resume -> keep the journal
         std::ostringstream out;
         CHECK(wcr::should_clear_journal(in, out, true, "out") == false);
+    }
+    {
+        std::istringstream in("n\n"); // explicit fresh -> clear
+        std::ostringstream out;
+        CHECK(wcr::should_clear_journal(in, out, true, "out") == true);
     }
     {
         std::istringstream in(""); // EOF -> resume, NEVER clears (safe default)

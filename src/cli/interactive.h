@@ -123,9 +123,10 @@ RunParams run_interactive(std::istream& in, std::ostream& out,
                           const FetchLocales& fetchLocales,
                           const ScreenReset& resetScreen = {});
 
-/// Resume decision: false (resume) when no journal exists; otherwise prompt and
-/// return true ONLY if the user explicitly chooses to start fresh. EOF/empty/
-/// "n" => false (safe default: keep the journal and resume). resetScreen, when
+/// Resume decision: false (resume) when no journal exists; otherwise prompt
+/// resume-first and return true ONLY if the user explicitly chooses to delete
+/// the previous state and start fresh ('n'). 'y' and EOF resume (safe default:
+/// keep the journal — EOF cannot confirm a destruction). resetScreen, when
 /// set, refreshes the banner before the prompt.
 bool should_clear_journal(std::istream& in, std::ostream& out,
                           bool journalExists, const std::string& outDir,

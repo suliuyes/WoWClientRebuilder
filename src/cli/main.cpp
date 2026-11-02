@@ -143,6 +143,28 @@ static void pause_if_interactive(bool interactive)
     }
 }
 
+/// Explain WHY an existing journal does not match this run, so a user whose
+/// resume state keeps getting discarded can see which choice changed (the
+/// region and the recipe digest -- version/mode/locales/cinematics -- are the
+/// ones people actually flip between runs).
+static void print_stamp_mismatch(const wcr::RunStamp& have,
+                                 const wcr::RunStamp& want)
+{
+    printf("      previous run: region=%s manifest=%s\n", have.region.c_str(),
+           have.manifest.c_str());
+    printf("      this run    : region=%s manifest=%s\n", want.region.c_str(),
+           want.manifest.c_str());
+    if (have.recipeId != want.recipeId)
+    {
+        printf("      ...and it covers a different version/mode/locale/"
+               "cinematic selection\n");
+    }
+    if (have.torrentId != want.torrentId)
+    {
+        printf("      ...and a different --tfil verification was used\n");
+    }
+}
+
 int main(int argc, char** argv)
 {
     if (CURLcode cc = curl_global_init(CURL_GLOBAL_DEFAULT); cc != CURLE_OK)
@@ -267,6 +289,27 @@ int main(int argc, char** argv)
                    "      be discarded when you confirm.\n",
                    forceFresh ? "is being restarted at your request"
                               : "is from an incompatible run");
+            if (!forceFresh && journal.stamped)
+            {
+                print_stamp_mismatch(journal.stamp, want);
+            }
+        }
+        if (resumable)
+        {
+            // Say up front what resuming actually saves, so the user can tell
+            // within seconds that the previous download was kept.
+            std::size_t doneCount = 0;
+            for (const Artifact& a : run.artifacts)
+            {
+                if (wcr::is_done(journal, a.outName))
+                {
+                    ++doneCount;
+                }
+            }
+            printf("Resuming previous download: %zu/%zu data files already "
+                   "completed, partial files continue from where they "
+                   "stopped\n",
+                   doneCount, run.artifacts.size());
         }
         if (!wcr::confirm_preflight(total, avail, params.yes,
                                     std::cin, std::cout))

@@ -496,10 +496,33 @@ bool should_clear_journal(std::istream& in, std::ostream& out,
     {
         resetScreen(out);
     }
-    return prompt_yes_no(
-        in, out,
-        "A previous download for '" + outDir +
-            "' was found. Start fresh (re-download everything) instead of "
-            "resuming?");
+    // Resume-first question: the recommended answer (y) continues the previous
+    // download; only an explicit 'n' discards it.  This used to ask
+    // "Start fresh ... instead of resuming?", whose yes meant destroying the
+    // partial state — the exact opposite of what a resuming user wants, and
+    // easy to misread.  EOF still resumes: it cannot confirm a destruction.
+    while (true)
+    {
+        out << "A previous download for '" << outDir << "' was found.\n"
+            << "  [y] Resume it - keep partial files, skip finished ones"
+            << " (recommended)\n"
+            << "  [n] Delete the old partial files and re-download from zero\n"
+            << "Resume? [y/n]: ";
+        std::string line;
+        if (!std::getline(in, line))
+        {
+            return false; // EOF -> resume, NEVER clears (safe default)
+        }
+        std::string s = to_lower(trim(line));
+        if (s == "y" || s == "yes")
+        {
+            return false;
+        }
+        if (s == "n" || s == "no")
+        {
+            return true;
+        }
+        out << "Please enter 'y' or 'n'.\n";
+    }
 }
 } // namespace wcr
