@@ -137,6 +137,7 @@ add_test(NAME wtf COMMAND wcrtests "-tc=write_runonce writes RunOnce.wtf and rea
 add_test(NAME wtf_custom COMMAND wcrtests "-tc=write_runonce honors custom host*")
 add_test(NAME journal COMMAND wcrtests "-tc=journal_round_trip")
 add_test(NAME region_swap COMMAND wcrtests "-tc=region_swap")
+add_test(NAME region_hint COMMAND wcrtests "-tc=journal_region_in reports the stamped region*")
 add_test(NAME journal_skip COMMAND wcrtests "-tc=journal_skip_done_file")
 add_test(NAME journal_resume_missing COMMAND wcrtests "-tc=journal_resume_redownloads_missing_file")
 add_test(NAME journal_resume_wrong_size COMMAND wcrtests "-tc=journal_resume_redownloads_wrong_size_file")

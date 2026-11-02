@@ -137,11 +137,15 @@ detect the previous state and offer to **resume**: already-completed files are s
 and partially-downloaded ones continue from where they stopped. Answer **`y`** to
 resume (recommended) or **`n`** to delete the old partial files and start over.
 
-The resume state is bound to the exact run identity — region, manifest, and the full
-download recipe (version/mode/locale/cinematics). A run with different choices discards
-the old state (disclosed before the pre-flight confirmation, with the reason) rather
-than splicing mismatched bytes. The optional `--tfil` piece verification participates
-in that identity too. The flag CLI (`--yes`) resumes automatically when the state
+The interactive region question **remembers** which region your previous download in
+the default output folder used ("A previous download in '...' used region EU (keep it
+to resume)"), so a resuming run re-picks it instead of mismatching. Resume state is
+per output folder and bound to the exact run identity — region, manifest, and the
+full download recipe (version/mode/locale/cinematics). A run with different choices
+discards the old state (disclosed before the pre-flight confirmation, with the
+previous/current region shown) rather than splicing mismatched bytes; nothing is
+discarded until you confirm. The optional `--tfil` piece verification participates in
+that identity too. The flag CLI (`--yes`) resumes automatically when the state
 matches, with no prompt.
 
 A file that was interrupted mid-download keeps its bytes (`.part` for Data artifacts,

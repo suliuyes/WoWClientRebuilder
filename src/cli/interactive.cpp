@@ -28,6 +28,7 @@
  */
 
 #include "interactive.h"
+#include "journal.h"
 #include <cctype>
 #include <cstdlib>
 #include <istream>
@@ -275,6 +276,20 @@ Nav prompt_region(std::istream& in, std::ostream& out, bool allowBack,
     return Nav::Select;
 }
 
+std::string journal_region_in(const std::string& outDir)
+{
+    // The resume journal stamps every run with its region exactly so a
+    // mismatch can be refused; reading that back here turns the stamp into a
+    // memory aid.  Unstamped (or foreign/unreadable) state reports "" -- only
+    // a stamp this build wrote is worth echoing.
+    Journal j = load_journal(outDir);
+    if (!j.stamped)
+    {
+        return std::string();
+    }
+    return j.stamp.region;
+}
+
 std::string build_for_version(const std::string& version)
 {
     for (const VersionInfo& v : kVersions)
@@ -445,6 +460,22 @@ RunParams run_interactive(std::istream& in, std::ostream& out,
             }
             case StepRegion:
             {
+                // The default output folder for the selections so far is
+                // knowable here -- that is where the resume offer will look.
+                // Naming the previous run's region BEFORE the choice means a
+                // resuming user cannot innocently pick the other region and
+                // find their partial download sentenced to discard at
+                // pre-flight.
+                const std::string deflt =
+                    derive_outdir(p.version, build_for_version(p.version),
+                                  p.mode, p.locales);
+                const std::string prevRegion = journal_region_in(deflt);
+                if (!prevRegion.empty())
+                {
+                    out << "A previous download in '" << deflt
+                        << "' used region " << prevRegion
+                        << " (keep it to resume).\n";
+                }
                 nav = prompt_region(in, out, allowBack, p.region);
                 break;
             }

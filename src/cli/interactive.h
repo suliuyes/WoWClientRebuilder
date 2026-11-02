@@ -96,6 +96,12 @@ Nav prompt_version(std::istream& in, std::ostream& out, bool allowBack,
 Nav prompt_region(std::istream& in, std::ostream& out, bool allowBack,
                   std::string& out_region);
 
+/// Region recorded by the resume journal in outDir ("" when there is no
+/// stamped journal there). Surfacing this at the region question lets a
+/// resuming user re-pick the region their partial download actually used,
+/// before a mismatching choice would discard it at pre-flight.
+std::string journal_region_in(const std::string& outDir);
+
 /// The build number paired with a supported version ("4.3.4" -> "15595"), or
 /// "" if the version is unknown. Mirrors find_recipe()'s supported set.
 std::string build_for_version(const std::string& version);

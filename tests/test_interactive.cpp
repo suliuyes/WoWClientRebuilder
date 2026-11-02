@@ -24,6 +24,9 @@
 
 #include "doctest.h"
 #include "interactive.h"
+#include "bytes.h"
+#include "journal.h"
+#include <filesystem>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -510,4 +513,33 @@ TEST_CASE("prompt_locale: empty advertised list -> all-locales sentinel, no prom
     CHECK(wcr::prompt_locale(in, out, {}, true, r) == wcr::Nav::Select);
     CHECK(r.empty());         // all-locales sentinel
     CHECK(out.str().empty()); // short-circuits without prompting/looping
+}
+
+TEST_CASE("journal_region_in reports the stamped region, only from a stamp")
+{
+    namespace fs = std::filesystem;
+    const fs::path dir =
+        fs::temp_directory_path() / "wcr_journal_region_hint";
+    std::error_code ec;
+    fs::remove_all(dir, ec); // start clean
+
+    // No journal at all: nothing to remember.
+    CHECK(wcr::journal_region_in(dir.string()).empty());
+
+    // A stamped journal is the only thing worth echoing back.
+    wcr::Journal j;
+    j.path            = (dir / ".wcr-journal").string();
+    j.stamp.region    = "EU";
+    j.stamp.manifest  = "wow-15595-test.mfil";
+    j.stamp.recipeId  = "abc123";
+    wcr::write_stamp(j);
+    CHECK(wcr::journal_region_in(dir.string()) == "EU");
+
+    // A bare line-dump journal (unstamped) has unestablishable provenance:
+    // never presented as a memory of a region.
+    wcr::write_file(dir.string() + "/.wcr-journal",
+                    wcr::Bytes{'D', 'a', 't', 'a', '/', 'x', '\n'});
+    CHECK(wcr::journal_region_in(dir.string()).empty());
+
+    fs::remove_all(dir, ec);
 }
