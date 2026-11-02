@@ -35,6 +35,7 @@
 #include "md5.h"
 #include "journal.h"
 #include "pieces.h"
+#include "progress.h"
 #include <cstdio>
 #include <filesystem>
 #include <map>
@@ -467,8 +468,23 @@ void reconstruct(const Recipe& r, const std::string& outDir,
         {
             if (resumeSkip)
             {
-                printf("  %-28s already downloaded (resumed)\n",
-                       a.outName.c_str());
+                // Resumed files speak the same visual language as a live
+                // download, pinned at 100%, so the work kept from the last
+                // run and the work left read as one continuous list.
+                std::error_code fszec;
+                long long done = a.size;
+                if (done < 0)
+                {
+                    done = static_cast<long long>(
+                        std::filesystem::file_size(dst, fszec));
+                }
+                if (fszec)
+                {
+                    done = 0;
+                }
+                printf("%s\n",
+                       wcr::render_progress(a.outName, done, done, -1)
+                           .c_str());
             }
             else
             {
