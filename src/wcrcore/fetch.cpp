@@ -135,12 +135,13 @@ std::vector<std::string> artifact_part_paths(const Recipe& r,
                                              const std::string& outDir)
 {
     // Mirrors the `part = dst + ".part"` naming used by reconstruct() below;
-    // the .fb sibling is legacy scratch from the removed region failover. The
-    // root-level source archives are included too: download_file resumes them
-    // in place, so a stale one from an incompatible run must not survive
-    // either (MoP's final update MPQ genuinely differs per region).
+    // the .fb sibling is legacy scratch from the removed region failover.
+    // Root-level source archives download to a .part sibling now, but older
+    // builds fetched them in place under their final name, so BOTH names are
+    // swept: a stale raw-name archive must not survive a fresh start either
+    // (MoP's final update MPQ genuinely differs per region).
     std::vector<std::string> out;
-    out.reserve(r.artifacts.size() * 2 + r.mpqs.size() + r.zips.size());
+    out.reserve(r.artifacts.size() * 2 + (r.mpqs.size() + r.zips.size()) * 2);
     for (const Artifact& a : r.artifacts)
     {
         const std::string dst = outDir + "/" + a.outName;
@@ -149,13 +150,17 @@ std::vector<std::string> artifact_part_paths(const Recipe& r,
     }
     for (const MpqSource& m : r.mpqs)
     {
-        out.push_back(outDir + "/" +
-                      m.url.substr(m.url.find_last_of('/') + 1));
+        const std::string base =
+            outDir + "/" + m.url.substr(m.url.find_last_of('/') + 1);
+        out.push_back(base + ".part");
+        out.push_back(base);
     }
     for (const ZipSource& z : r.zips)
     {
-        out.push_back(outDir + "/" +
-                      z.url.substr(z.url.find_last_of('/') + 1));
+        const std::string base =
+            outDir + "/" + z.url.substr(z.url.find_last_of('/') + 1);
+        out.push_back(base + ".part");
+        out.push_back(base);
     }
     return out;
 }
@@ -237,49 +242,125 @@ void reconstruct(const Recipe& r, const std::string& outDir,
 
     try
     {
-    // Download each zip source once and keep its bytes in memory.
+    // Download each zip source once and keep its bytes in memory.  A zip
+    // lands under a .part name and only ever keeps that name while it is
+    // incomplete, so an interrupted run can never leave a partial archive
+    // looking like a finished one; a finished zip is kept and reused as-is by
+    // later runs of the same recipe instead of being fetched again.
     for (const ZipSource& z : r.zips)
     {
-        std::string dest = outDir + "/" + url_basename(z.url);
-        printf("Downloading %s...\n", url_basename(z.url).c_str());
-        DownloadOpts zopts;
-        zopts.progress_label = url_basename(z.url);
-        download_file(z.url, dest, zopts);
-        // Track the zip file BEFORE read_file: if read_file throws (e.g. a
-        // disk error after a successful download), the exception path below
-        // needs zipSourceFiles to be populated so it can remove the stranded
-        // zip file.  On the success path the inline remove(dest) below cleans
-        // it up, and the catch cleanup is a harmless no-op.
-        zipSourceFiles.push_back(url_basename(z.url));
-        zipCache[z.key] = read_file(dest);
-        std::filesystem::remove(dest);
+        const std::string base = url_basename(z.url);
+        const std::string dest = outDir + "/" + base;
+        const std::string part = dest + ".part";
+        std::error_code zec;
+        bool useLegacy = false;
+        if (std::filesystem::exists(part, zec))
+        {
+            // Finish the earlier download; a .part that is already complete
+            // makes the server answer 416, which download_file treats as
+            // done, so this is instant in that case.
+            printf("Resuming %s from a previous download...\n", base.c_str());
+            DownloadOpts zopts;
+            zopts.progress_label = base;
+            download_file(z.url, part, zopts);
+        }
+        else if (std::filesystem::exists(dest, zec))
+        {
+            // No .part but the final name exists: a zip left by an older
+            // in-place build.  Its bytes are validated by the zip parsing
+            // below; a corrupt one throws, gets swept, and is re-fetched.
+            useLegacy = true;
+            printf("Using existing %s (from an earlier run)...\n",
+                   base.c_str());
+        }
+        else
+        {
+            printf("Downloading %s...\n", base.c_str());
+            DownloadOpts zopts;
+            zopts.progress_label = base;
+            download_file(z.url, part, zopts);
+        }
+        // Track BOTH names BEFORE read_file: if read_file throws (e.g. a disk
+        // error after a successful download), the exception path below needs
+        // the list populated so it can remove the stranded archive.  They are
+        // intentionally NOT removed here any more -- keeping them is what
+        // lets the reuse branch above skip the fetch on the next run; the
+        // full-success cleanup at the end of reconstruct() removes them.
+        zipSourceFiles.push_back(base + ".part");
+        if (useLegacy)
+        {
+            zipSourceFiles.push_back(base);
+        }
+        zipCache[z.key] = read_file(useLegacy ? dest : part);
     }
 
-    // Download each MPQ source once and open it for reading.
+    // Download each MPQ source once and open it for reading.  Same .part
+    // discipline, plus a size pre-check: the expected byte count is pinned
+    // per source, so an archive already sitting at the final name with
+    // exactly that size needs no network at all.
     for (const MpqSource& m : r.mpqs)
     {
-        std::string dest = outDir + "/" + url_basename(m.url);
-        DownloadOpts mopts;
-        mopts.expected_size = m.size;
-        mopts.progress_label = url_basename(m.url);
-        printf("Downloading %s...\n", url_basename(m.url).c_str());
-        try
+        const std::string base = url_basename(m.url);
+        const std::string dest = outDir + "/" + base;
+        const std::string part = dest + ".part";
+        std::error_code mec;
+        bool ready = false;
+        if (m.size >= 0 && !std::filesystem::exists(part, mec))
         {
-            download_file(m.url, dest, mopts);
+            std::error_code sec;
+            const auto have = std::filesystem::file_size(dest, sec);
+            if (!sec && static_cast<long long>(have) == m.size)
+            {
+                printf("  %-28s already complete (checked)\n", base.c_str());
+                ready = true;
+            }
+            else if (!sec)
+            {
+                // A file of the wrong length under the final name is stale
+                // (an in-place build's partial, or another region's archive:
+                // sizes are pinned per region).  Appending can never fix it.
+                std::filesystem::remove(dest, sec);
+            }
         }
-        catch (const SizeMismatchError&)
+        if (!ready)
         {
-            // The archive on disk has the wrong length in place; appending
-            // more can never fix it.  Remove it so the next run re-downloads
-            // from zero instead of failing the same way forever.
-            std::error_code rec;
-            std::filesystem::remove(dest, rec);
-            throw;
+            if (std::filesystem::exists(part, mec))
+            {
+                printf("Resuming %s from a previous download...\n",
+                       base.c_str());
+            }
+            else
+            {
+                printf("Downloading %s...\n", base.c_str());
+            }
+            DownloadOpts mopts;
+            mopts.expected_size = m.size;
+            mopts.progress_label = base;
+            try
+            {
+                download_file(m.url, part, mopts);
+            }
+            catch (const SizeMismatchError&)
+            {
+                // The .part has the wrong length in place; appending more
+                // can never fix it.  Remove it so the next run re-downloads
+                // from zero instead of failing the same way forever.
+                std::error_code rec;
+                std::filesystem::remove(part, rec);
+                throw;
+            }
+            // Promote the verified archive to its final name.  An older
+            // in-place file of the wrong length was removed above; remove
+            // defensively anyway because Windows rename refuses to replace.
+            std::filesystem::remove(dest, mec);
+            std::filesystem::rename(part, dest);
         }
-        // Track BEFORE opening: if MpqArchive construction throws (e.g. corrupt
-        // MPQ that downloaded at the right size but is invalid), the file is
-        // still on disk and must be cleaned up by the exception path below.
-        mpqSourceFiles.push_back(url_basename(m.url));
+        // Track BOTH names BEFORE opening: if MpqArchive construction throws
+        // (e.g. corrupt MPQ that downloaded at the right size but is
+        // invalid), the files are still on disk and must be cleaned up by
+        // the exception path below; the missing one is a harmless no-op.
+        mpqSourceFiles.push_back(base + ".part");
+        mpqSourceFiles.push_back(base);
         mpqCache[m.key] = std::make_unique<MpqArchive>(dest);
     }
 
@@ -298,6 +379,28 @@ void reconstruct(const Recipe& r, const std::string& outDir,
         {
             case Source::RepairMd5:
             {
+                // These binaries used to be re-fetched on every run, which
+                // made a resumed run LOOK like a fresh start.  A file already
+                // on disk that hashes to the pinned MD5 is byte-identical to
+                // what the repair store would serve: verify it, show it in
+                // the same 100% language as every other kept file, and leave
+                // the network idle.  A mismatch (truncated/tampered output)
+                // falls through to the normal fresh download below.
+                std::error_code bec;
+                if (std::filesystem::exists(dst, bec))
+                {
+                    Bytes existing = read_file(dst);
+                    if (md5_hex(existing) == a.md5)
+                    {
+                        // Route through the shared skipped path: it prints
+                        // the same 100% line as every other kept file and
+                        // continues before the common MD5 verification (data
+                        // is intentionally left empty here).
+                        skipped    = true;
+                        resumeSkip = true;
+                        break;
+                    }
+                }
                 part = dst + ".part";
                 DownloadOpts dopts;
                 dopts.resume = false;
@@ -361,7 +464,16 @@ void reconstruct(const Recipe& r, const std::string& outDir,
                 // bytes.
                 popts.resume = journalTrusted;
                 popts.expected_size = a.size;
-                popts.progress_label = a.outName;
+                // Say "resuming" on the progress line when a partial from an
+                // earlier run is about to be continued, so a live transfer
+                // and a continued one are distinguishable at a glance.
+                std::string label = a.outName;
+                std::error_code pec;
+                if (popts.resume && std::filesystem::exists(part, pec))
+                {
+                    label += " (resuming)";
+                }
+                popts.progress_label = label;
                 if (journalTrusted && is_done(*opts.journal, a.outName))
                 {
                     // Only skip if the destination file is actually on disk.
@@ -574,6 +686,10 @@ void reconstruct(const Recipe& r, const std::string& outDir,
     // the source .MPQ open and Windows refuses to delete an open file (the
     // remove fails silently via error_code), stranding the scratch in the root.
     mpqCache.clear();
+    // Zips are no longer removed inline after their bytes are read (a kept
+    // archive is what lets a later run reuse it), so the success cleanup must
+    // strip them here alongside the MPQ sources.
+    remove_build_scratch(outDir, zipSourceFiles);
     remove_build_scratch(outDir, mpqSourceFiles);
     {
         std::error_code jec;

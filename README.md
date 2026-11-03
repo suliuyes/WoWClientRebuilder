@@ -148,11 +148,15 @@ discarded until you confirm. The optional `--tfil` piece verification participat
 that identity too. The flag CLI (`--yes`) resumes automatically when the state
 matches, with no prompt.
 
-A file that was interrupted mid-download keeps its bytes (`.part` for Data artifacts,
-in place for the source archives). A file that finished downloading but was not yet
-recorded is detected and kept as well — no re-download is needed. Files whose on-disk
-size is wrong in place (e.g. an appended error page) are discarded automatically so
-the next run starts that file fresh instead of failing forever.
+How to read the console output on a resumed run: every file the folder already has
+is verified and shown as a **`100%` progress line** (program binaries by MD5, data
+archives by their pinned size) — no bytes are fetched for it. Lines that say
+**`Downloading ...`** are real transfers; **`Resuming ... from a previous download`**
+continues an interrupted one at its byte offset. An unfinished file always keeps its
+`.part` suffix until its bytes are fully verified, so the output folder itself shows
+what is complete and what is not. A `.part` that cannot be continued cleanly (wrong
+length in place, e.g. an appended error page) is deleted automatically and that file
+starts over, instead of failing forever.
 
 ### Scripted (flags)
 

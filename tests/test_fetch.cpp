@@ -31,6 +31,10 @@
 #include "fetch.h"
 #include "recipe.h"
 #include "bytes.h"
+#include "md5.h"
+#include "zip.h"
+#include "miniz.h"
+#include <cstring>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -405,4 +409,109 @@ TEST_CASE("remove_build_scratch deletes source MPQs, spares the journal")
     CHECK(fs::exists(dir + "/.wcr-journal"));
     CHECK(fs::exists(dir + "/Wow.exe"));
     fs::remove_all(dir);
+}
+
+TEST_CASE("RepairMd5 artifact on disk with the pinned MD5 is skipped, not "
+          "re-fetched")
+{
+    std::string work = make_temp_dir("repair_skip");
+    // The repair-store URL points at a port nothing listens on, so ANY
+    // download attempt fails the run.  Only the on-disk MD5 verify path can
+    // produce the output -- this proves the skip actually short-circuits.
+    wcr::Bytes binary = {'W', 'o', 'W', '!', 'b', 'i', 'n'};
+    wcr::Recipe r;
+    r.version    = "test";
+    r.repairBase = "http://127.0.0.1:1/repair";
+    wcr::Artifact a;
+    a.outName = "Wow.exe";
+    a.md5     = wcr::md5_hex(binary);
+    r.artifacts.push_back(a);
+
+    std::string out = work + "/out";
+    std::filesystem::create_directories(out);
+    wcr::write_file(out + "/Wow.exe", binary); // already complete
+
+    CHECK_NOTHROW(wcr::reconstruct(r, out, wcr::ReconstructOpts{}));
+    CHECK(wcr::read_file(out + "/Wow.exe") == binary); // untouched
+    // A skipped binary leaves no .part scratch behind.
+    CHECK_FALSE(std::filesystem::exists(out + "/Wow.exe.part"));
+    std::filesystem::remove_all(work);
+}
+
+TEST_CASE("RepairMd5 artifact with wrong on-disk bytes is re-downloaded")
+{
+    namespace fs = std::filesystem;
+    std::string work = make_temp_dir("repair_redl");
+    wcr::Bytes binary = {'R', 'E', 'P', 'A', 'I', 'R'};
+    // Serve the real bytes from a file:// repair store at the exact
+    // <base>/<c0>/<c1>/<MD5> layout repair_url() computes.
+    const std::string md5  = wcr::md5_hex(binary);
+    const std::string base = work + "/repair/" + md5.substr(0, 1) + "/" +
+                             md5.substr(1, 1);
+    fs::create_directories(base);
+    wcr::write_file(base + "/" + md5, binary);
+
+    wcr::Recipe r;
+    r.version    = "test";
+    r.repairBase = "file:///" + work + "/repair";
+    wcr::Artifact a;
+    a.outName = "Wow.exe";
+    a.md5     = md5;
+    r.artifacts.push_back(a);
+
+    std::string out = work + "/out";
+    fs::create_directories(out);
+    wcr::Bytes corrupt(7, uint8_t('X')); // same size, wrong bytes
+    wcr::write_file(out + "/Wow.exe", corrupt);
+
+    CHECK_NOTHROW(wcr::reconstruct(r, out, wcr::ReconstructOpts{}));
+    CHECK(wcr::read_file(out + "/Wow.exe") == binary); // replaced
+    fs::remove_all(work);
+}
+
+TEST_CASE("zip source under its final name is reused, not re-downloaded")
+{
+    namespace fs = std::filesystem;
+    std::string work = make_temp_dir("zip_legacy");
+    // Build a real one-member zip with miniz and place it at the OUT dir root
+    // under its final name -- the layout an interrupted run of an older build
+    // leaves behind.  The source URL points at nothing: any fetch attempt
+    // fails the run, so only the reuse path can extract the member.
+    mz_zip_archive ar;
+    mz_zip_zero_struct(&ar);
+    REQUIRE(mz_zip_writer_init_heap(&ar, 0, 0));
+    const char* member   = "HELPERBIN";
+    wcr::Bytes memberBytes(member, member + std::strlen(member));
+    REQUIRE(mz_zip_writer_add_mem(&ar, "helper.exe", member,
+                                  std::strlen(member), MZ_BEST_COMPRESSION));
+    void* buf = nullptr;
+    size_t sz = 0;
+    REQUIRE(mz_zip_writer_finalize_heap_archive(&ar, &buf, &sz));
+    wcr::Bytes zipBytes(static_cast<uint8_t*>(buf),
+                        static_cast<uint8_t*>(buf) + sz);
+    mz_free(buf);
+    mz_zip_writer_end(&ar);
+
+    wcr::Recipe r;
+    r.version = "test";
+    wcr::ZipSource z;
+    z.key = "live";
+    z.url = "http://127.0.0.1:1/WoWLive-test.zip";
+    r.zips.push_back(z);
+    wcr::Artifact a;
+    a.outName = "helper.exe";
+    a.md5     = wcr::md5_hex(memberBytes);
+    a.source  = wcr::Source::ZipMember;
+    a.zipKey  = "live";
+    r.artifacts.push_back(a);
+
+    std::string out = work + "/out";
+    fs::create_directories(out);
+    wcr::write_file(out + "/WoWLive-test.zip", zipBytes);
+
+    CHECK_NOTHROW(wcr::reconstruct(r, out, wcr::ReconstructOpts{}));
+    CHECK(wcr::read_file(out + "/helper.exe") == memberBytes);
+    // The reused zip is scratch: the success path must clean it up.
+    CHECK_FALSE(fs::exists(out + "/WoWLive-test.zip"));
+    fs::remove_all(work);
 }

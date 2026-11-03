@@ -557,13 +557,17 @@ TEST_CASE("artifact_part_paths_mirrors_reconstruct_naming")
     r.zips.push_back(z);
 
     std::vector<std::string> got = wcr::artifact_part_paths(r, "out");
-    REQUIRE(got.size() == 6);
+    REQUIRE(got.size() == 8);
     CHECK(got[0] == "out/Data/x.bin.part");
     CHECK(got[1] == "out/Data/x.bin.part.fb");
     CHECK(got[2] == "out/Updates/y.MPQ.part");
     CHECK(got[3] == "out/Updates/y.MPQ.part.fb");
-    CHECK(got[4] == "out/base-Win.MPQ");
-    CHECK(got[5] == "out/WoWLive-64-Win-15595.zip");
+    // Sources download to a .part sibling now; the raw name is swept too so
+    // in-place archives left by older builds cannot survive a fresh start.
+    CHECK(got[4] == "out/base-Win.MPQ.part");
+    CHECK(got[5] == "out/base-Win.MPQ");
+    CHECK(got[6] == "out/WoWLive-64-Win-15595.zip.part");
+    CHECK(got[7] == "out/WoWLive-64-Win-15595.zip");
 }
 
 TEST_CASE("recipe_id_binds_the_full_download_identity")

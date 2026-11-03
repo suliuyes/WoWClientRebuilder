@@ -81,6 +81,9 @@ add_test(NAME md5 COMMAND wcrtests "-tc=md5_hex RFC 1321 standard test vectors (
 add_test(NAME zip COMMAND wcrtests "-tc=zip_extract_member returns a stored member's bytes")
 add_test(NAME recipe COMMAND wcrtests "-tc=find_recipe selects by version and rejects unknown")
 add_test(NAME fetch COMMAND wcrtests "-tc=repair_url maps an MD5 to <base>/<c0>/<c1>/<MD5>")
+add_test(NAME repair_md5_skip COMMAND wcrtests "-tc=RepairMd5 artifact on disk with the pinned MD5 is skipped*")
+add_test(NAME repair_md5_redownload COMMAND wcrtests "-tc=RepairMd5 artifact with wrong on-disk bytes is re-downloaded")
+add_test(NAME zip_legacy_reuse COMMAND wcrtests "-tc=zip source under its final name is reused*")
 add_test(NAME acceptance
   COMMAND wcrtests "-tc=byte-exact 5.4.8 Wow.exe from real fixtures"
   WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
